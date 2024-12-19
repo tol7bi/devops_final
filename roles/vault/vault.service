@@ -1,0 +1,14 @@
+[Unit]
+Description=HashiCorp Vault
+After=network.target
+
+[Service]
+LimitMEMLOCK=infinity
+User=vault
+Group=vault
+ExecStart=/usr/bin/vault server -config=/data/vaultconfig
+Restart=on-failure
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

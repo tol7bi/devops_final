@@ -1,0 +1,48 @@
+stages:
+  - module-pipeline
+
+
+gitlab-runners:
+  stage: module-pipeline
+  trigger:
+    include:
+      - /gitlab-runners/.gitlab-ci.yml
+    strategy: depend
+
+  only:
+    changes:
+      - gitlab-runners/**/*
+
+
+deploy-grafana:
+  stage: module-pipeline
+  trigger:
+    include:
+      - /grafana/.gitlab-ci.yml
+    strategy: depend
+
+  only:
+    changes:
+      - grafana/**/*
+
+template-check:
+  stage: module-pipeline
+  trigger:
+    include:
+      - /gitlab-ci/.gitlab-ci.yml
+    strategy: depend
+
+  only:
+    changes:
+      - gitlab-ci/**/*
+
+migrations:
+  stage: module-pipeline
+  trigger:
+    include:
+      - /migrations/.gitlab-ci.yml
+    strategy: depend
+
+  only:
+    changes:
+      - migrations/**/*

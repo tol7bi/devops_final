@@ -1,0 +1,49 @@
+stages:
+  - validate
+  - plan
+  - apply
+
+default:
+  image:
+    name: hashicorp/terraform:latest
+    entrypoint:
+      - /usr/bin/env
+      - "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  tags:
+    - terraform
+  before_script:
+    - |
+      terraform -chdir=gitlab-runners init -lockfile=readonly \
+      -backend-config="address=$CI_API_V4_URL/projects/$CI_PROJECT_ID/terraform/state/$GITLAB_TF_STATE_NAME" \
+      -backend-config="lock_address=$CI_API_V4_URL/projects/$CI_PROJECT_ID/terraform/state/$GITLAB_TF_STATE_NAME/lock" \
+      -backend-config="unlock_address=$CI_API_V4_URL/projects/$CI_PROJECT_ID/terraform/state/$GITLAB_TF_STATE_NAME/lock" \
+      -backend-config="username=$TF_VAR_GITLAB_ADMIN_USERNAME" \
+      -backend-config="password=$TF_VAR_GITLAB_ADMIN_TOKEN"
+
+
+fmt:
+  stage: validate
+  allow_failure: true
+  script:
+    - echo "Checking the Terraform configuration"
+    - terraform -chdir=gitlab-runners fmt -check -recursive
+
+validate:
+  stage: validate
+  script:
+    - echo "Validating the Terraform configuration"
+    - terraform -chdir=gitlab-runners validate
+
+plan:
+  stage: plan
+  script:
+    - echo "Planning the Terraform configuration"
+    - terraform -chdir=gitlab-runners plan -var-file=$GITLAB_TF_VAR_FILE
+
+apply:
+  stage: apply
+  script:
+    - echo "Applying the Terraform configuration"
+    - terraform -chdir=gitlab-runners apply -auto-approve -var-file=$GITLAB_TF_VAR_FILE
+  rules:
+    - when: manual

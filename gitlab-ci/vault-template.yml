@@ -1,0 +1,16 @@
+.vault:
+  image: hashicorp/vault:latest
+  variables:
+    VAULT_ADDR: "http://172.17.0.1:8200"
+    VAULT_SECRET_PATH: "secret/postgres_db"
+    FLYWAY_IMAGE: "custom-flyway:latest"
+    FLYWAY_URL: "jdbc:postgresql://172.17.0.1:5432/${POSTGRES_DB}"
+
+  before_script:
+    - export VAULT_TOKEN=${VAULT_ROOT_TOKEN}
+    - export VAULT_ADDR=${VAULT_ADDR}
+  script:
+    - echo "POSTGRES_USER=$(vault kv get -field=user ${VAULT_SECRET_PATH})" >> migrations/vault.env
+    - cat migrations/vault.env
+
+

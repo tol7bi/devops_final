@@ -1,0 +1,219 @@
+---
+- name: Install and Configure Nexus Repository Manager
+  hosts: nexus
+  become: true
+  vars:
+    nexus_version: "3.45.0-01"
+    nexus_install_dir: "/opt/nexus"
+    nexus_data_dir: "/opt/sonatype-work"
+    nexus_user: "nexus"
+    nexus_group: "nexus"
+    nexus_service_file: "/etc/systemd/system/nexus.service"
+    nexus_admin_password_file: "{{ nexus_data_dir }}/nexus3/admin.password"
+    nexus_url: "http://{{ ansible_host }}:8081"
+    nexus_docker_hosted_port: 8082
+    nexus_docker_proxy_port: 8083
+    nexus_docker_group_port: 8084
+    docker_cli_config_path: "/root/.docker/config.json"
+
+
+  tasks:
+    - name: Install prerequisites
+      apt:
+        name: openjdk-8-jdk
+        state: present
+        update_cache: yes
+
+    - name: Create nexus user and group
+      group:
+        name: "{{ nexus_group }}"
+        state: present
+
+    - name: Create nexus user
+      user:
+        name: "{{ nexus_user }}"
+        group: "{{ nexus_group }}"
+        create_home: no
+        shell: /bin/false
+
+    - name: Download Nexus Repository Manager
+      get_url:
+        url: "https://download.sonatype.com/nexus/3/nexus-{{ nexus_version }}-unix.tar.gz"
+        dest: "/tmp/nexus-{{ nexus_version }}-unix.tar.gz"
+
+    - name: Extract Nexus
+      unarchive:
+        src: "/tmp/nexus-{{ nexus_version }}-unix.tar.gz"
+        dest: "/opt/"
+        remote_src: yes
+
+    - name: Rename nexus directory
+      command: mv /opt/nexus-{{ nexus_version }} {{ nexus_install_dir }}
+      args:
+        creates: "{{ nexus_install_dir }}"
+
+    - name: Change ownership of Nexus directories
+      file:
+        path: "{{ item }}"
+        owner: "{{ nexus_user }}"
+        group: "{{ nexus_group }}"
+        recurse: yes
+      with_items:
+        - "{{ nexus_install_dir }}"
+        - "{{ nexus_data_dir }}"
+
+    - name: Configure nexus to run as nexus user
+      lineinfile:
+        path: "{{ nexus_install_dir }}/bin/nexus.rc"
+        line: "run_as_user=\"{{ nexus_user }}\""
+
+    - name: Create systemd service file for Nexus
+      copy:
+        dest: "{{ nexus_service_file }}"
+        content: |
+          [Unit]
+          Description=Nexus Repository Manager
+          After=network.target
+
+          [Service]
+          Type=forking
+          LimitNOFILE=65536
+          ExecStart={{ nexus_install_dir }}/bin/nexus start
+          ExecStop={{ nexus_install_dir }}/bin/nexus stop
+          User={{ nexus_user }}
+          Restart=on-abort
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd and enable Nexus service
+      systemd:
+        daemon_reload: yes
+        name: nexus
+        enabled: yes
+        state: started
+
+    - name: Wait for Nexus to become available
+      wait_for:
+        port: 8081
+        timeout: 120
+
+    - name: Retrieve admin password
+      command: "cat {{ nexus_admin_password_file }}"
+      register: admin_password_output
+      changed_when: false
+
+    - name: Set admin password as fact
+      set_fact:
+        nexus_admin_password: "{{ admin_password_output.stdout }}"
+        
+
+    - name: Create Docker Hosted Repository
+      uri:
+        url: "{{ nexus_url }}/service/rest/v1/repositories/docker/hosted"
+        method: POST
+        user: "admin"
+        password: "{{ nexus_admin_password }}"
+        headers:
+          Content-Type: "application/json"
+        body: |
+          {
+            "name": "docker-hosted",
+            "online": true,
+            "storage": {
+              "blobStoreName": "default",
+              "strictContentTypeValidation": true,
+              "writePolicy": "allow"
+            },
+            "docker": {
+              "v1Enabled": false,
+              "forceBasicAuth": true,
+              "httpPort": "{{ nexus_docker_hosted_port }}"
+            }
+          }
+        body_format: json
+        status_code: 201
+      register: create_repo_response
+
+
+    - name: Configure Docker CLI to use Nexus Docker-hosted repository
+      blockinfile:
+        path: "{{ docker_cli_config_path }}"
+        create: yes
+        block: |
+          {
+            "auths": {
+              "{{ ansible_host }}:{{ nexus_docker_hosted_port }}": {
+                "auth": "{{ 'admin:' + {{ nexus_admin_password }} | b64encode }}"
+              }
+            }
+          }
+
+    - name: Login to Nexus Docker repository
+      command: >
+        docker login {{ ansible_host }}:{{ nexus_docker_hosted_port }}
+        --username admin
+        --password "{{ nexus_admin_password }}"
+
+    - name: Create Docker Proxy Repository for Go
+      uri:
+        url: "{{ nexus_url }}/service/rest/v1/repositories/docker/proxy"
+        method: POST
+        user: "admin"
+        password: "{{ nexus_admin_password }}"
+        headers:
+          Content-Type: "application/json"
+        body: |
+          {
+            "name": "docker-go-proxy",
+            "online": true,
+            "storage": {
+              "blobStoreName": "default",
+              "strictContentTypeValidation": true,
+              "writePolicy": "allow"
+            },
+            "docker": {
+              "v1Enabled": false,
+              "forceBasicAuth": true,
+              "httpPort": "{{ nexus_docker_proxy_port }}"
+            },
+            "proxy": {
+              "remoteUrl": "https://registry-1.docker.io",
+              "indexType": "HUB",
+              "useNexusCertificatesToAccessIndex": false,
+              "negativeCacheEnabled": true,
+              "negativeCacheTtl": 1440,
+              "maximumComponentAge": 1440,
+              "maximumMetadataAge": 1440
+            }
+          }
+        body_format: json
+        status_code: 201
+      register: create_proxy_repo_response
+
+
+    - name: Create Docker Group Repository
+      uri:
+        url: "{{ nexus_url }}/service/rest/v1/repositories/docker/group"
+        method: POST
+        user: "admin"
+        password: "{{ nexus_admin_password }}"
+        headers:
+          Content-Type: "application/json"
+        body: |
+          {
+            "name": "docker-group",
+            "online": true,
+            "docker": {
+              "v1Enabled": false,
+              "forceBasicAuth": true,
+              "httpPort": "{{ nexus_docker_group_port }}"
+            },
+            "memberRepos": [
+              "docker-hosted",
+              "docker-go-proxy"
+            ]
+          }
+        body_format: json
+        status_code: 201
+      register: create_group_repo_response

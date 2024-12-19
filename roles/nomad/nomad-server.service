@@ -1,0 +1,13 @@
+[Unit]
+Description=HashiCorp Nomad Server
+After=network.target
+
+[Service]
+User=nomad
+Group=nomad
+ExecStart=/usr/bin/nomad agent -config=/data/nomad_server/nomad
+Restart=on-failure
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

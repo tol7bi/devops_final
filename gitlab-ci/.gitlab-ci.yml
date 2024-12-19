@@ -1,0 +1,14 @@
+stages:
+  - test
+
+include:  
+  - '/gitlab-ci/sonar-test-template.yml'
+  - '/gitlab-ci/vault-template.yml'
+
+sonar:
+  stage: test
+  extends: .sonarqube
+
+vault:
+  stage: test
+  extends: .vault

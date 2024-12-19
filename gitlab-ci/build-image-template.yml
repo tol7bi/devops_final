@@ -1,0 +1,27 @@
+.docker-registry: &docker-registry
+  script: 
+    - echo $CI_REGISTRY_PASSWORD | docker login -u gitlab-ci-token -p $CI_JOB_TOKEN $CI_REGISTRY 
+
+.build-image:
+  image: docker:20
+  stage: build
+  services:
+    - docker:20-dind
+  variables:
+    IMAGE_TAG: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME$CI_JOB_ID
+    
+  before_script:
+    - *docker-registry
+  script:
+    - docker build --pull -t "$IMAGE_TAG" .
+    - docker push "$IMAGE_TAG"
+    - |
+      if [[ "$CI_COMMIT_BRANCH" == "$CI_DEFAULT_BRANCH" ]]; then
+        docker tag "$IMAGE_TAG" "$CI_REGISTRY_IMAGE:latest"
+        docker push "$CI_REGISTRY_IMAGE:latest"
+      fi
+
+  rules:
+    - if: $CI_COMMIT_BRANCH
+      exists:
+        - Dockerfile

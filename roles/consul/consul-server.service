@@ -1,0 +1,13 @@
+[Unit]
+Description=HashiCorp Consul Server
+After=network.target
+
+[Service]
+User=consul
+Group=consul
+ExecStart=/usr/bin/consul agent -config-dir=/data/consul_server/consul.hcl
+Restart=on-failure
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

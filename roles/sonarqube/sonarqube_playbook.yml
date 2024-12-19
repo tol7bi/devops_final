@@ -1,0 +1,100 @@
+- name: Deploy SonarQube
+  hosts: servers
+  become: yes
+  tasks:
+    - name: Update package list
+      apt:
+        update_cache: yes
+
+    - name: Install required packages
+      apt:
+        name:
+          - openjdk-17-jdk
+          - unzip
+          - wget
+        state: present
+
+    - name: Define SonarQube version and paths
+      set_fact:
+        sonarqube_version: "9.9.1.69595"
+        sonarqube_dir: "/opt/sonarqube"
+
+    - name: Create sonar directory
+      ansible.builtin.file:
+        path: "{{ sonarqube_dir }}"
+        state: directory
+
+    - name: Download SonarQube
+      get_url:
+        url: "https://binaries.sonarsource.com/Distribution/sonarqube/sonarqube-{{ sonarqube_version }}.zip"
+        dest: "/tmp/sonarqube.zip"
+
+    - name: Extract SonarQube
+      unarchive:
+        src: "/tmp/sonarqube.zip"
+        dest: "/opt/sonarqube"
+        remote_src: yes
+
+    - name: Rename SonarQube directory
+      command: mv {{ sonarqube_dir }}/sonarqube-{{ sonarqube_version }} {{ sonarqube_dir }}/sonar
+
+    - name: Remove temporary SonarQube zip file
+      file:
+        path: "/tmp/sonarqube.zip"
+        state: absent
+
+    - name: Create sonar group
+      group:
+        name: sonar
+        state: present
+
+    - name: Create sonar user
+      user:
+        name: sonar
+        group: sonar
+        home: "{{ sonarqube_dir }}"
+        shell: /bin/bash
+        state: present
+
+    - name: Set ownership for SonarQube directory
+      file:
+        path: "{{ sonarqube_dir }}"
+        state: directory
+        recurse: yes
+        owner: sonar
+        group: sonar
+
+    - name: Configure SonarQube systemd service
+      copy:
+        dest: /etc/systemd/system/sonarqube.service
+        content: |
+          [Unit]
+          Description=SonarQube service
+          After=network.target
+
+          [Service]
+          Type=forking
+          ExecStart={{ sonarqube_dir }}/sonar/bin/linux-x86-64/sonar.sh start
+          ExecStop={{ sonarqube_dir }}/sonar/bin/linux-x86-64/sonar.sh stop
+          User=sonar
+          Group=sonar
+          Environment="JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64"
+          Restart=on-failure
+          LimitNOFILE=65536
+          LimitNPROC=4096
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd daemon
+      command: systemctl daemon-reload
+
+    - name: Enable SonarQube service
+      systemd:
+        name: sonarqube
+        enabled: yes
+
+    - name: Start SonarQube service
+      systemd:
+        name: sonarqube
+        state: started

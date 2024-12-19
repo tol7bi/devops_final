@@ -1,0 +1,74 @@
+stages:
+  - prepare
+  - migrate
+  - validate
+  - rollback
+
+variables:
+  VAULT_ADDR: "http://172.17.0.1:8200"
+  VAULT_SECRET_PATH: "secret/postgres_db"
+  FLYWAY_IMAGE: "custom-flyway:latest"
+  FLYWAY_URL: "jdbc:postgresql://172.17.0.1:5432/${POSTGRES_DB}"
+
+prepare:
+  stage: prepare
+  tags:
+    - flyway
+  image: docker:latest
+  script:
+    - echo "Fetching Vault secrets"
+    - echo "Installing Vault CLI"
+    - wget https://releases.hashicorp.com/vault/1.15.0/vault_1.15.0_linux_amd64.zip
+    - unzip vault_1.15.0_linux_amd64.zip && mv vault /usr/local/bin
+    - export VAULT_TOKEN=${VAULT_ROOT_TOKEN}
+    - export VAULT_ADDR=${VAULT_ADDR}
+
+    - echo "Exporting secrets to vault.env"
+    - echo "POSTGRES_USER=$(vault kv get -field=user ${VAULT_SECRET_PATH})" >> migrations/vault.env
+    - echo "POSTGRES_PASSWORD=$(vault kv get -field=password ${VAULT_SECRET_PATH})" >> migrations/vault.env
+    - echo "POSTGRES_DB=$(vault kv get -field=database_name ${VAULT_SECRET_PATH})" >> migrations/vault.env
+    - echo "Secrets stored in vault.env"
+  artifacts:
+    reports:
+      dotenv: migrations/vault.env
+
+migrate:
+  stage: migrate
+  tags:
+    - flyway
+  image: docker:latest
+  script:
+    - echo "Building custom Flyway image"
+    - cd migrations
+    - docker build -t ${FLYWAY_IMAGE} .
+    - echo "Running Flyway migrations"
+    - docker run --rm -e FLYWAY_URL=${FLYWAY_URL} -e FLYWAY_USER=${POSTGRES_USER} -e FLYWAY_PASSWORD=${POSTGRES_PASSWORD} ${FLYWAY_IMAGE} migrate
+
+validate:
+  stage: validate
+  tags:
+    - flyway
+  image: docker:latest
+  script:
+    - echo "Running Flyway validation"
+    - source migrations/vault.env
+    - docker run --rm -e FLYWAY_URL=${FLYWAY_URL} -e FLYWAY_USER=${POSTGRES_USER} -e FLYWAY_PASSWORD=${POSTGRES_PASSWORD} ${FLYWAY_IMAGE} validate
+
+rollback:
+  stage: rollback
+  tags:
+    - flyway
+  image: docker:latest
+  when: manual
+  script:
+    - echo "Rolling back migrations using psql"
+    - apk update && apk add postgresql-client
+    - for script in ${CI_PROJECT_DIR}/migrations/rollback/*.sql; do
+        echo "Applying rollback script $script";
+        PGPASSWORD=${POSTGRES_PASSWORD} psql -h 172.17.0.1 -U ${POSTGRES_USER} -d ${POSTGRES_DB} -f "$script";
+      done
+    - echo "Resetting Flyway schema history"
+    - |
+      PGPASSWORD=${POSTGRES_PASSWORD} psql -h 172.17.0.1 -U ${POSTGRES_USER} -d ${POSTGRES_DB} <<SQL
+      DELETE FROM flyway_schema_history;
+      SQL

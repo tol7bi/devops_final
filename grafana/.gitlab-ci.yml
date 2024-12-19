@@ -1,0 +1,15 @@
+stages:
+  - deploy
+
+deploy_grafana:
+  stage: deploy
+  image:
+    name: hashicorp/nomad:latest
+    entrypoint:
+      - /usr/bin/env
+      - "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  script:
+    - echo "Deploying Grafana..."
+    - export NOMAD_ADDR=$TF_VAR_NOMAD_HOST
+    - nomad job run grafana/grafana.nomad
+    - nomad job status grafana

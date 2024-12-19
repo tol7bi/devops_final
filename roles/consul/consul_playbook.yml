@@ -1,0 +1,90 @@
+- name: Install and configure Consul
+  hosts: localhost
+  become: yes
+  vars:
+    deb_architecture: {
+      "aarch64": "arm64",
+      "x86_64": "amd64"
+    }
+
+  tasks:
+    - name: Download and add GPG key
+      ansible.builtin.shell: |
+        wget -O - https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+      args:
+        creates: /usr/share/keyrings/hashicorp-archive-keyring.gpg
+      
+    - name: Add HashiCorp repository
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/hashicorp.list
+        content: |
+          deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg arch={{ [ansible_architecture] | map('extract', deb_architecture) | first }}] https://apt.releases.hashicorp.com {{ ansible_distribution_release}} main
+      register: hashicorp_repo
+
+    - name: Update APT cache
+      ansible.builtin.apt:
+        update_cache: yes
+      when: hashicorp_repo.changed
+
+    - name: Install Consul package
+      ansible.builtin.apt: 
+        name: consul
+        state: present
+
+    - name: Create Consul user and group
+      user:
+        name: consul
+        group: consul
+        shell: /bin/false
+        system: yes
+        state: present
+
+    - name: Create Consul configuration directory
+      file:
+        path: /data/consul
+        state: directory
+        mode: '0755'
+
+    - name: Ensure /var/lib/consul_server/data exists with correct permissions
+      file:
+        path: /var/lib/consul_server/data
+        state: directory
+        owner: consul
+        group: consul
+        mode: '0750'
+        recurse: true
+
+    - name: Ensure /data/consul_server exists with correct permissions
+      file:
+        path: /data/consul_server
+        state: directory
+        owner: consul
+        group: consul
+        mode: '0750'
+        recurse: true
+
+    - name: Copy the Consul Server config file to /data/consul_server
+      copy:
+        src: config_server/consul.hcl
+        dest: /data/consul_server/consul.hcl
+        owner: consul
+        group: consul
+        mode: '0644'
+
+    - name: Create a Consul Server systemd unit file
+      copy:
+        src: consul-server.service
+        dest: /etc/systemd/system/consul-server.service
+      notify:
+        - Reload systemd
+
+    - name: Enable and start consul Server service
+      systemd:
+        name: consul-server
+        enabled: yes
+        state: started
+
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes

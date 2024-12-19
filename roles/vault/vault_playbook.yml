@@ -1,0 +1,67 @@
+- name: Install and configure Vault
+  hosts: servers
+  become: yes
+  vars:
+    deb_architecture: {
+      "aarch64": "arm64",
+      "x86_64": "amd64"
+    }
+  tasks:
+    - name: Add Vault repository
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg arch={{ [ansible_architecture] | map('extract', deb_architecture) | first }}] https://apt.releases.hashicorp.com {{ ansible_distribution_release }} main"
+        state: present
+
+    - name: Install Vault package
+      apt:
+        name: vault
+        state: present
+
+    - name: Create Vault user and group
+      user:
+        name: vault
+        group: vault
+        shell: /bin/false
+        system: yes
+        state: present
+
+    - name: Create Vault configuration directory
+      file:
+        path: /data
+        state: directory
+        mode: '0755'
+
+    - name: Ensure /var/lib/vault/data exists with correct permissions
+      file:
+        path: /var/lib/vault/data
+        state: directory
+        owner: vault
+        group: vault
+        mode: '0750'
+        recurse: true
+
+    - name: Copy the Vault config file to /data
+      copy:
+        src: vaultconfig
+        dest: /data/vaultconfig
+        owner: vault
+        group: vault
+        mode: '0644'
+
+    - name: Create a Vault systemd unit file
+      copy:
+        src: vault.service
+        dest: /etc/systemd/system/vault.service
+      notify:
+        - Reload systemd
+
+    - name: Enable and start Vault service
+      systemd:
+        name: vault
+        enabled: yes
+        state: started
+
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes

@@ -1,0 +1,182 @@
+- name: Install and configure Nomad
+  hosts: servers
+  become: yes
+  vars:
+    deb_architecture: {
+      "aarch64": "arm64",
+      "x86_64": "amd64"
+    }
+  tasks:
+    - name: Add HashiCorp GPG key
+      ansible.builtin.shell: |
+        wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+      args:
+        creates: /usr/share/keyrings/hashicorp-archive-keyring.gpg
+
+    - name: Add Nomad repository
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg arch={{ [ansible_architecture] | map('extract', deb_architecture) | first }}] https://apt.releases.hashicorp.com {{ ansible_distribution_release }} main"
+        state: present
+
+    - name: Install Nomad package
+      apt:
+        name: nomad
+        state: present
+
+    - name: Create Nomad user and group
+      user:
+        name: nomad
+        group: nomad
+        shell: /bin/false
+        system: yes
+        state: present
+
+    - name: Create Nomad configuration directory
+      file:
+        path: /data/nomad
+        state: directory
+        mode: '0755'
+
+    - name: Ensure /var/lib/nomad_server/data exists with correct permissions
+      file:
+        path: /var/lib/nomad_server/data
+        state: directory
+        owner: nomad
+        group: nomad
+        mode: '0750'
+        recurse: true
+
+    - name: Ensure /var/lib/nomad_client/data exists with correct permissions
+      file:
+        path: /var/lib/nomad_client/data
+        state: directory
+        owner: nomad
+        group: nomad
+        mode: '0750'
+        recurse: true
+
+    - name: Ensure /data/nomad_server exists with correct permissions
+      file:
+        path: /data/nomad_server
+        state: directory
+        owner: nomad
+        group: nomad
+        mode: '0750'
+        recurse: true
+
+    - name: Ensure /data/nomad_client exists with correct permissions
+      file:
+        path: /data/nomad_client
+        state: directory
+        owner: nomad
+        group: nomad
+        mode: '0750'
+        recurse: true
+
+    - name: Copy the Nomad Server config file to /data/nomad_server
+      copy:
+        src: config_server/nomad.hcl
+        dest: /data/nomad_server/nomad
+        owner: nomad
+        group: nomad
+        mode: '0644'
+
+    - name: Copy the Nomad Client config file to /data/nomad_client
+      copy:
+        src: config_client/nomad.hcl
+        dest: /data/nomad_client/nomad
+        owner: nomad
+        group: nomad
+        mode: '0644'
+
+    - name: Create a Nomad Server systemd unit file
+      copy:
+        src: nomad-server.service
+        dest: /etc/systemd/system/nomad-server.service
+      notify:
+        - Reload systemd
+
+    - name: Create a Nomad Client systemd unit file
+      copy:
+        src: nomad-client.service
+        dest: /etc/systemd/system/nomad-client.service
+      notify:
+        - Reload systemd
+
+    - name: Enable and start Nomad Server service
+      systemd:
+        name: nomad-server
+        enabled: yes
+        state: started
+
+    - name: Enable and start Nomad Client service
+      systemd:
+        name: nomad-client
+        enabled: yes
+        state: started
+
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+- name: Setup Docker and configure Nomad user
+  hosts: all
+  become: yes
+  vars:
+    deb_architecture: {
+      "aarch64": "arm64",
+      "x86_64": "amd64"
+    }
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install dependencies for Docker
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - software-properties-common
+        state: present
+
+    - name: Add Docker’s official GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker APT repository
+      apt_repository:
+        repo: "deb [arch={{ [ansible_architecture] | map('extract', deb_architecture) | first }}] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+
+    - name: Install Docker
+      apt:
+        name: docker-ce
+        state: present
+
+    - name: Ensure Docker service is running and enabled
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Add Nomad user to the Docker group
+      user:
+        name: nomad
+        groups: docker
+        append: yes
+
+    - name: Restart Nomad service to apply group changes
+      service:
+        name: nomad-server
+        state: restarted
+
+    - name: Restart Nomad service to apply group changes
+      service:
+        name: nomad-client
+        state: restarted
+
+

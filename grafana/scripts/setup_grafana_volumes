@@ -1,0 +1,42 @@
+#! /bin/bash
+
+# This script searches for '# GRAFANA CONFIG PLACEHOLDER' string in /data/nomad_client/nomad
+# and replaces it with the content of ./config/nomad_grafana_volumes.hcl
+
+if [ "$EUID" -ne 0 ]; then
+  echo "Please run as root"
+  exit
+fi
+
+# Exit on error
+set -e
+
+# Check if the file exists
+if [ ! -f /data/nomad_client/nomad ]; then
+  echo "Nomad config file not found"
+  exit 1
+fi
+
+mkdir -p /etc/grafana
+mkdir -p /var/lib/grafana
+
+chmod 777 /etc/grafana
+chmod 777 /var/lib/grafana
+
+cp ./config/grafana.ini /etc/grafana/grafana.ini
+
+# Check if the file contains the placeholder
+if ! grep -q "# GRAFANA CONFIG PLACEHOLDER" /data/nomad_client/nomad; then
+  echo "Nomad config file does not contain the placeholder"
+  exit 0
+fi
+
+# Replace the placeholder with the actual config
+sed -i "/# GRAFANA CONFIG PLACEHOLDER/{r ./config/nomad_grafana_volumes.hcl
+d}" /data/nomad_client/nomad
+echo "Nomad config updated for Grafana"
+
+# restart service
+systemctl restart nomad-client.service
+
+systemctl status nomad-client.service

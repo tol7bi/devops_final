@@ -1,0 +1,60 @@
+stages:
+  - fetch-secrets
+  - deploy
+  - switch-traffic
+  - verify
+
+variables:
+  VAULT_ADDR: "http://127.0.0.1:8200"  
+  NOMAD_ADDR: "http://127.0.0.1:4646"  
+  SERVICE_NAME: "pgbouncer"            
+  NOMAD_JOB_FILE: "pgbouncer.nomad"    
+  CONSUL_DNS: "zadolbal-devops.service.consul"  
+
+before_script:
+  - echo "Configuring environment..."
+  - apt-get update && apt-get install -y curl jq
+  - export VAULT_TOKEN=$(vault login -method=token -token-only "$VAULT_ROOT_TOKEN")
+
+fetch-secrets:
+  stage: fetch-secrets
+  script:
+    - echo "Fetching secrets from Vault..."
+    - export PG_USER=$(vault kv get -format=json secret/pgbouncer | jq -r '.data.data.user')
+    - export PG_PASSWORD=$(vault kv get -format=json secret/pgbouncer | jq -r '.data.data.password')
+    - echo "Secrets fetched successfully."
+  only:
+    - main
+
+deploy-pgbouncer:
+  stage: deploy
+  script:
+    - echo "Starting blue-green deployment on Nomad..."
+
+    - sed -i "s/{{PG_USER}}/$PG_USER/g" $NOMAD_JOB_FILE
+    - sed -i "s/{{PG_PASSWORD}}/$PG_PASSWORD/g" $NOMAD_JOB_FILE
+    - nomad job run -check-index 0 $NOMAD_JOB_FILE
+    - echo "New version (green) deployed successfully."
+
+  only:
+    - main
+switch-traffic:
+  stage: switch-traffic
+  script:
+    - echo "Switching traffic to the new version..."
+    - HEALTH=$(consul health checks -service=$SERVICE_NAME | grep passing | wc -l)
+    - if [ "$HEALTH" -lt 1 ]; then echo "New deployment unhealthy! Aborting."; exit 1; fi
+    - echo "New version is healthy. Switching traffic."
+
+  only:
+    - main
+
+verify-dns:
+  stage: verify
+  script:
+    - echo "Verifying DNS resolution for $CONSUL_DNS..."
+    - dig @127.0.0.1 $CONSUL_DNS
+    - psql "host=$CONSUL_DNS port=6432 user=$PG_USER password=$PG_PASSWORD dbname=auth_db" -c "\l"
+    - echo "DNS and connectivity verified successfully."
+  only:
+    - main
